@@ -1,0 +1,23 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"python.defaultInterpreterPath": "~/.miniconda3/envs/pyg/bin/python"
+	},
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			{
+				"name": "Python: massbankml",
+				"type": "python",
+				"request": "launch",
+				"program": "main.py",
+				"console": "integratedTerminal",
+				"justMyCode": true
+			}
+		]
+	}
+}
