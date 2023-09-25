@@ -105,7 +105,7 @@ def ftree2fp_learn(num_features, hidden_dim, num_layers, batch_size, input_path,
         leny_loss_list=[]
         total_loss_list=[]
 
-        for data in tqdm(train_loader, desc='Epoch {:>3d}'.format(epoch)):
+        for data in tqdm(train_loader, desc='Epoch {:>3d}'.format(epoch), ncols=80):
             data=data.to(device)
             optimizer.zero_grad()
             y,leny=model(data)
@@ -134,7 +134,7 @@ def ftree2fp_learn(num_features, hidden_dim, num_layers, batch_size, input_path,
             leny_loss_list=[]
             total_loss_list=[]
 
-            for data in tqdm(val_loader, desc='Epoch {:>3d}'.format(epoch)):
+            for data in tqdm(val_loader, desc='Epoch {:>3d}'.format(epoch), ncols=80):
                 data=data.to(device)
                 y,leny=model(data)
                 y_loss=y_lossf(y, data.y.float())

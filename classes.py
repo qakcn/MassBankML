@@ -134,4 +134,5 @@ class Ftree2fpGAT(torch.nn.Module):
         x1 = self.lin(x)
         x1 = torch.sigmoid(x1)
         x2 = self.linlen(x)
+        x2 = x2.reshape(-1)
         return x1,x2
