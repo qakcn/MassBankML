@@ -94,8 +94,8 @@ def ftree2fp_learn(num_features, hidden_dim, num_layers, batch_size, input_path,
     leny_lossf=torch.nn.MSELoss()
     optimizer=optim.Adam(model.parameters(), lr=0.005)
 
-    train_losses=dict(loss1=[], loss2=[], total_loss=[])
-    val_losses=dict(loss1=[], loss2=[], total_loss=[])
+    train_losses=dict(y_loss=[], leny_loss=[], total_loss=[])
+    val_losses=dict(y_loss=[], leny_loss=[], total_loss=[])
 
     Timer.tick('all')
     for epoch in range(num_epochs):
@@ -105,7 +105,7 @@ def ftree2fp_learn(num_features, hidden_dim, num_layers, batch_size, input_path,
         leny_loss_list=[]
         total_loss_list=[]
 
-        for data in tqdm(train_loader, desc='Epoch {:>3d}'.format(epoch), ncols=80):
+        for data in tqdm(train_loader, desc='Train {:>3d}'.format(epoch), ncols=80):
             data=data.to(device)
             optimizer.zero_grad()
             y,leny=model(data)
@@ -134,7 +134,7 @@ def ftree2fp_learn(num_features, hidden_dim, num_layers, batch_size, input_path,
             leny_loss_list=[]
             total_loss_list=[]
 
-            for data in tqdm(val_loader, desc='Epoch {:>3d}'.format(epoch), ncols=80):
+            for data in tqdm(val_loader, desc='Test {:>3d}'.format(epoch), ncols=80):
                 data=data.to(device)
                 y,leny=model(data)
                 y_loss=y_lossf(y, data.y.float())
@@ -156,9 +156,9 @@ def ftree2fp_learn(num_features, hidden_dim, num_layers, batch_size, input_path,
                 torch.save(train_losses, output_path/'ftree2fp.train_losses.{}.pkl'.format(epoch+1))
                 torch.save(val_losses, output_path/'ftree2fp.val_losses.{}.pkl'.format(epoch+1))
 
-            if mean(y_loss_list) > 10 or mean(leny_loss_list) > 10 or mean(total_loss_list) > 15:
-                print('Loss is too large. Stop training.')
-                break
+            # if mean(y_loss_list) > 10 or mean(leny_loss_list) > 10 or mean(total_loss_list) > 15:
+            #     print('Loss is too large. Stop training.')
+            #     break
 
     torch.save(model.state_dict(), output_path/'ftree2fp.model.pkl')
     torch.save(train_losses, output_path/'ftree2fp.train_losses.pkl')

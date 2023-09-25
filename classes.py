@@ -115,24 +115,24 @@ class Ftree2fpDataset(Dataset):
 class Ftree2fpGAT(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, num_layers, output_dim, dropout=0.5):
         super(Ftree2fpGAT, self).__init__()
-        self.conv1 = pyg_nn.GCNConv(in_channels=input_dim, out_channels=hidden_dim)
-        self.conv2 = pyg_nn.GCNConv(in_channels=hidden_dim, out_channels=hidden_dim)
-        self.conv3 = pyg_nn.GCNConv(in_channels=hidden_dim, out_channels=output_dim)
+        self.conv1 = pyg_nn.GATv2Conv(in_channels=input_dim, out_channels=hidden_dim, dropout=dropout, edge_dim=1)
+        self.conv2 = pyg_nn.GATv2Conv(in_channels=hidden_dim, out_channels=hidden_dim, dropout=dropout, edge_dim=1)
+        self.conv3 = pyg_nn.GATv2Conv(in_channels=hidden_dim, out_channels=output_dim, dropout=dropout, edge_dim=1)
         self.dropout = nn.Dropout(dropout)
         self.lin = torch.nn.Linear(output_dim, output_dim)
         self.linlen = torch.nn.Linear(output_dim, 1)
     
     def forward(self, data):
         x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-        x = self.conv1(x=x, edge_index=edge_index, edge_weight=edge_attr)
+        x = self.conv1(x=x, edge_index=edge_index, edge_attr=edge_attr)
         x = x.relu()
-        x = self.conv2(x=x, edge_index=edge_index, edge_weight=edge_attr)
+        x = self.conv2(x=x, edge_index=edge_index, edge_attr=edge_attr)
         x = x.relu()
-        x = self.conv3(x=x, edge_index=edge_index, edge_weight=edge_attr)
+        x = self.conv3(x=x, edge_index=edge_index, edge_attr=edge_attr)
         x = x.relu()
         x = pyg_nn.pool.global_mean_pool(x, batch)
         x1 = self.lin(x)
         x1 = torch.sigmoid(x1)
-        x2 = self.linlen(x)
+        x2 = self.linlen(x1)
         x2 = x2.reshape(-1)
         return x1,x2
