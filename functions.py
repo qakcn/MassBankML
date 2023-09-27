@@ -61,7 +61,7 @@ def ftree2fp_load_dataset(input_path):
 
     print()
     for edata in ftree2fp_dataset['data']:
-        ndata=Data(x=torch.tensor(edata['x'], dtype=torch.float).reshape([-1,1]),
+        ndata=Data(x=torch.tensor(edata['x'], dtype=torch.long).reshape([-1,1]),
                    edge_index=torch.tensor(edata['edge_index'], dtype=torch.long),
                    edge_attr=torch.tensor(edata['edge_attr'], dtype=torch.float32).reshape([-1,1]),
                    y=torch.tensor(edata['y_idx'], dtype=torch.long).reshape([1,-1]))
@@ -73,7 +73,9 @@ def ftree2fp_load_dataset(input_path):
     print("\n\rFinished Loading Data.")
     return ndataset
 
-def ftree2fp_learn(num_features, hidden_dim, num_layers, batch_size, input_path, output_path, num_epochs, save_epochs, device):
+def ftree2fp_learn(num_features, hidden_dim, embedding_dim, num_layers, batch_size, num_epochs, save_epochs, input_path, output_path, device):
+    tfwriter=SummaryWriter(output_path/'tfevent')
+
     dataset=ftree2fp_load_dataset(input_path)
 
     train_size = int(0.6 * len(dataset))
@@ -89,10 +91,10 @@ def ftree2fp_learn(num_features, hidden_dim, num_layers, batch_size, input_path,
     train_loader=DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     val_loader=DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
-    model=Ftree2fpGAT(num_features, hidden_dim, num_layers, dataset.len_y_max).to(device)
+    model=Ftree2fpGAT(num_features, hidden_dim, embedding_dim, num_layers, dataset.len_y_max).to(device)
     y_lossf=torch.nn.BCELoss()
     leny_lossf=torch.nn.MSELoss()
-    optimizer=optim.Adam(model.parameters(), lr=0.005)
+    optimizer=optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
 
     train_losses=dict(y_loss=[], leny_loss=[], total_loss=[])
     val_losses=dict(y_loss=[], leny_loss=[], total_loss=[])
@@ -121,7 +123,11 @@ def ftree2fp_learn(num_features, hidden_dim, num_layers, batch_size, input_path,
             leny_loss_list.append(leny_loss.item())
             total_loss_list.append(total_loss.item())
 
-        print('\nEpoch {:>4d}/{:>4d} y_loss: {:>10.6f} leny_loss: {:>10.6f} total_loss: {:>10.6f} time: {:>10.6f}/{:>10.6f}'.format(epoch, num_epochs, mean(y_loss_list), mean(leny_loss_list), mean(total_loss_list), Timer.tock(), Timer.tock('all')))
+        print('Epoch {:>4d}/{:>4d} y_loss: {:>10.6f} leny_loss: {:>10.6f} total_loss: {:>10.6f} time: {:>10.6f}/{:>10.6f}\n'.format(epoch, num_epochs, mean(y_loss_list), mean(leny_loss_list), mean(total_loss_list), Timer.tock(), Timer.tock('all')))
+
+        tfwriter.add_scalar('Train y_loss', mean(y_loss_list), epoch)
+        tfwriter.add_scalar('Train leny_loss', mean(leny_loss_list), epoch)
+        tfwriter.add_scalar('Train total_loss', mean(total_loss_list), epoch)
 
         train_losses['y_loss'].append(mean(y_loss_list))
         train_losses['leny_loss'].append(mean(leny_loss_list))
@@ -145,11 +151,15 @@ def ftree2fp_learn(num_features, hidden_dim, num_layers, batch_size, input_path,
                 leny_loss_list.append(leny_loss.item())
                 total_loss_list.append(total_loss.item())
 
-            print('\nEpoch {:>4d}/{:>4d} y_loss: {:>10.6f} leny_loss: {:>10.6f} total_loss: {:>10.6f} time: {:>10.6f}/{:>10.6f}'.format(epoch, num_epochs, mean(y_loss_list), mean(leny_loss_list), mean(total_loss_list), Timer.tock(), Timer.tock('all')))
+            print('Epoch {:>4d}/{:>4d} y_loss: {:>10.6f} leny_loss: {:>10.6f} total_loss: {:>10.6f} time: {:>10.6f}/{:>10.6f}\n'.format(epoch, num_epochs, mean(y_loss_list), mean(leny_loss_list), mean(total_loss_list), Timer.tock(), Timer.tock('all')))
 
             val_losses['y_loss'].append(mean(y_loss_list))
             val_losses['leny_loss'].append(mean(leny_loss_list))
             val_losses['total_loss'].append(mean(total_loss_list))
+
+            tfwriter.add_scalar('Test y_loss', mean(y_loss_list), epoch)
+            tfwriter.add_scalar('Test leny_loss', mean(leny_loss_list), epoch)
+            tfwriter.add_scalar('Test total_loss', mean(total_loss_list), epoch)
 
             if(epoch+1) % save_epochs == 0:
                 torch.save(model.state_dict(), output_path/'ftree2fp.model.{}.pkl'.format(epoch+1))
@@ -170,5 +180,6 @@ def make_path(output_path):
     """
     output_path=output_path/time.strftime('%Y%m%d %H%M%S %z')
     output_path.mkdir(parents=True, exist_ok=True)
+    (output_path/'tfevent').mkdir(parents=True, exist_ok=True)
 
     return output_path

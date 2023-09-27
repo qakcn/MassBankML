@@ -11,10 +11,11 @@ load_vocab(inputpath)
 cur_outputpath=make_path(outputpath)
 ftree2fp_learn(num_features=1,
                hidden_dim=5120,
+               embedding_dim=20,
                num_layers=3,
-               batch_size=32,
-               input_path=inputpath,
-               output_path=cur_outputpath,
+               batch_size=64,
                num_epochs=300,
                save_epochs=30,
+               input_path=inputpath,
+               output_path=cur_outputpath,
                device=device)
