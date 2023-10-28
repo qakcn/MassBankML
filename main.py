@@ -6,16 +6,26 @@ outputpath = Path('./outputs')
 
 load_vocab(inputpath)
 
-# prepare_data(inputpath, device)
+# prepare_data(inputpath)
 
-cur_outputpath=make_path(outputpath)
-ftree2fp_learn(num_features=1,
-               hidden_dim=5120,
-               embedding_dim=20,
+continuing=False
+if continuing:
+    cur_outputpath=outputpath/'20231021 204124 +0800'
+else:
+    cur_outputpath=make_path(outputpath)
+
+ftree2fp_learn(hidden_dim=1024,
+               gat_heads=4,
+               num_features=14,
                num_layers=3,
                batch_size=64,
-               num_epochs=300,
+               num_epochs=3000,
                save_epochs=30,
+               learning_rate=0.0001,
+               weight_decay=1e-4,
                input_path=inputpath,
                output_path=cur_outputpath,
+               continuing=continuing,
+               node_is_elems=True,
+               classes_is_bit=True,
                device=device)

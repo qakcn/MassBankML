@@ -1,6 +1,21 @@
+import pickle
+
+from torch import optim
+from torch.utils.data import random_split
+from torch.utils.tensorboard import SummaryWriter
+
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader
+
+import torchmetrics as tm
+
+from tqdm import tqdm
+from statistics import mean
+from pathlib import Path
+
 from classes import *
 
-def load_vocab(input_path):
+def load_vocab(input_path: Path):
     """
     Load the vocabulary from the input path.
     :param input_path: The path to the input data.
@@ -9,31 +24,27 @@ def load_vocab(input_path):
     vocab_data=pickle.loads((input_path/'vocabs_2.pkl').read_bytes())
     Vocab.load(vocab_data)
 
-def fp2idx(datalist, dataname=''):
+def fp2bits(datalist, dataname=''):
     """
     Convert the fingerprint to the index.
     :param fp: The fingerprint.
     :return: The index.
     """
-    tobinpattern=lambda x: '{:010b}'.format(x)
-    toidxlist = lambda x: [int(c) for c in x]
     allnum = len(datalist)
     idxnum = 0
-    y_max = 0
     print()
     for edata in datalist:
-        y=edata['y']
+        fp_bits=[0]*1024
+        fp=edata['fingerprint']
+        for bit in fp:
+            fp_bits[bit]=1
         idxnum = idxnum + 1
-        y_max = max(y_max, len(y))
-        fpidx_list = []
-        for bits in y:
-            fpidx = toidxlist(tobinpattern(bits))
-            fpidx_list.append(fpidx)
-        edata['y_idx'] = fpidx_list
-        print('\rProcessed {} data {:>5d}/{:>5d}. y_max = {:>3d}'.format(dataname, idxnum, allnum, y_max), end='', flush=True)
-    return dict(data = datalist, y_max = y_max)
+        edata['fingerprint_bits'] = fp_bits
+        print('\rProcessed {} data {:>5d}/{:>5d}.'.format(dataname, idxnum, allnum), end='', flush=True)
+    print()
+    return datalist
 
-def prepare_data(input_path, device):
+def prepare_data(input_path):
     """
     Prepare the data for the model.
     :param input_path: The path to the input data.
@@ -41,14 +52,53 @@ def prepare_data(input_path, device):
     :return: The prepared data.
     """
     ftree2fp_data=pickle.loads((input_path/'ftree2fp.dataset.pkl').read_bytes())
-    ftree2fp_data_prepared = fp2idx(ftree2fp_data, 'ftree2fp')
+    ftree2fp_data_prepared = fp2bits(ftree2fp_data, 'ftree2fp')
     (input_path/'ftree2fp.dataset.prepared.pkl').write_bytes(pickle.dumps(ftree2fp_data_prepared, 4))
 
     mol2fp_data=pickle.loads((input_path/'mol2fp.dataset.pkl').read_bytes())
-    mol2fp_data_prepared = fp2idx(mol2fp_data, 'mol2fp')    
+    mol2fp_data_prepared = fp2bits(mol2fp_data, 'mol2fp')    
     (input_path/'mol2fp.dataset.prepared.pkl').write_bytes(pickle.dumps(mol2fp_data_prepared, 4))
 
-def ftree2fp_load_dataset(input_path):
+def gen_nodes_features(node_attr):
+    node_features = []
+    for node in node_attr:
+        formula = node['molecularFormula']
+        mz = node['mz']
+        relint = node['relativeIntensity']
+        elems = parseFormula(formula)
+        ev = list(elems.values())
+        ev.append(mz)
+        ev.append(relint)
+        node_features.append(ev)
+    return node_features
+
+def parseFormula(formula):
+    formula=formula + '='
+    elems=dict.fromkeys(Constant.Elements, 0)
+    elemstr=''
+    numstr=''
+    for x in range(len(formula)):
+        l=formula[x]
+        if l == '[':
+            continue
+        if l in 'CHONPSIBFA]=':
+            if elemstr != '':
+                if numstr != '':
+                    num = int(numstr)
+                    numstr = ''
+                else:
+                    num = 1
+                elems[elemstr] = num
+            elemstr = l
+            if l == ']':
+                break
+        if l in '0123456789':
+            numstr += l
+        if l in 'lris':
+            elemstr += l
+    return elems
+
+def ftree2fp_load_dataset(input_path, node_is_elems=False, classes_is_bit=False):
     """
     Load the data for the ftree2fp model.
     :param input_path: The path to the input data.
@@ -60,119 +110,198 @@ def ftree2fp_load_dataset(input_path):
     len_y_max=0
 
     print()
-    for edata in ftree2fp_dataset['data']:
-        ndata=Data(x=torch.tensor(edata['x'], dtype=torch.long).reshape([-1,1]),
+    for edata in ftree2fp_dataset:
+
+        x = gen_nodes_features(edata['node_attr']) if node_is_elems else edata['node']
+
+        ndata=Data(x=torch.tensor(x, dtype=torch.float32 if node_is_elems else torch.long),
                    edge_index=torch.tensor(edata['edge_index'], dtype=torch.long),
                    edge_attr=torch.tensor(edata['edge_attr'], dtype=torch.float32).reshape([-1,1]),
-                   y=torch.tensor(edata['y_idx'], dtype=torch.long).reshape([1,-1]))
+                   y=torch.tensor(edata['fingerprint_bits' if classes_is_bit else 'fingerprint'], dtype=torch.long).reshape([1,-1]))
         len_y_max=max(len_y_max, len(ndata.y[0]))
         datalist.append(ndata)
-        print("\rLoad data: {:>5d}/{:>5d} max num_classes: {}".format(len(datalist), len(ftree2fp_dataset['data']), len_y_max), end='', flush=True)
+        print("\rLoad data: {:>5d}/{:>5d} max num_classes: {}".format(len(datalist), len(ftree2fp_dataset), len_y_max), end='', flush=True)
 
     ndataset=Ftree2fpDataset(datalist, len_y_max)
     print("\n\rFinished Loading Data.")
     return ndataset
 
-def ftree2fp_learn(num_features, hidden_dim, embedding_dim, num_layers, batch_size, num_epochs, save_epochs, input_path, output_path, device):
-    tfwriter=SummaryWriter(output_path/'tfevent')
+def ftree2fp_learn(hidden_dim, num_features, num_layers, batch_size, num_epochs, save_epochs, input_path, output_path, device, gat_heads=1, num_embeddings=0, dropout=0.5, learning_rate=0.001, weight_decay=1e-4, node_is_elems=False, classes_is_bit=False, continuing=False, continue_from='last'):
+    train_tfwriter=SummaryWriter(output_path/'tfevent/train')
+    valid_tfwriter=SummaryWriter(output_path/'tfevent/valid')
 
-    dataset=ftree2fp_load_dataset(input_path)
+    torch.save({
+        'hidden_dim': hidden_dim,
+        'num_features': num_features,
+        'num_layers': num_layers,
+        'batch_size': batch_size,
+        'num_epochs': num_epochs,
+        'save_epochs': save_epochs,
+        'gat_heads': gat_heads,
+        'num_embeddings': num_embeddings,
+        'dropout': dropout,
+        'learning_rate': learning_rate,
+        'weight_decay': weight_decay,
+        'node_is_elems': node_is_elems,
+        'classes_is_bit': classes_is_bit,
+    }, output_path/'ftree2fp.params.pkl', pickle_protocol=4)
 
-    train_size = int(0.6 * len(dataset))
-    val_size = int(0.2 * len(dataset))
-    test_size = len(dataset) - train_size - val_size
-    
-    train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
-    train_dataset.len_y_max=dataset.len_y_max
-    val_dataset.len_y_max=dataset.len_y_max
-    test_dataset.len_y_max=dataset.len_y_max
-    torch.save(test_dataset, output_path/'test_dataset.pkl', pickle_protocol=4)
+    if not continuing:
+        dataset=ftree2fp_load_dataset(input_path, node_is_elems, classes_is_bit)
+
+        train_size = int(0.8 * len(dataset))
+        valid_size = int(0.1 * len(dataset))
+        test_size = len(dataset) - train_size - valid_size
+        
+        train_dataset, valid_dataset, test_dataset = random_split(dataset, [train_size, valid_size, test_size])
+        train_dataset.len_y_max=dataset.len_y_max
+        valid_dataset.len_y_max=dataset.len_y_max
+        test_dataset.len_y_max=dataset.len_y_max
+        torch.save(train_dataset, output_path/'train_dataset.pkl', pickle_protocol=4)
+        torch.save(valid_dataset, output_path/'valid_dataset.pkl', pickle_protocol=4)
+        torch.save(test_dataset, output_path/'test_dataset.pkl', pickle_protocol=4)
+    else:
+        train_dataset=torch.load(output_path/'train_dataset.pkl')
+        valid_dataset=torch.load(output_path/'valid_dataset.pkl')
+        test_dataset=torch.load(output_path/'test_dataset.pkl')
 
     train_loader=DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader=DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+    valid_loader=DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
-    model=Ftree2fpGAT(num_features, hidden_dim, embedding_dim, num_layers, dataset.len_y_max).to(device)
-    y_lossf=torch.nn.BCELoss()
-    leny_lossf=torch.nn.MSELoss()
-    optimizer=optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
+    model=Ftree2fpGAT(hidden_dim=hidden_dim,
+                      num_features=num_features,
+                      num_layers=num_layers,
+                      output_dim=train_dataset.len_y_max,
+                      dropout=dropout,
+                      num_embeddings=num_embeddings,
+                      classes_is_bit=classes_is_bit,
+                      heads=gat_heads).to(device)
 
-    train_losses=dict(y_loss=[], leny_loss=[], total_loss=[])
-    val_losses=dict(y_loss=[], leny_loss=[], total_loss=[])
+    lossf=torch.nn.BCELoss() if classes_is_bit else torch.nn.MSELoss()
+    optimizer=optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
+    accuracy=tm.Accuracy(task="binary").to(device)
+    precision=tm.Precision(task="binary").to(device)
+    auc=tm.AUROC(task="binary").to(device)
+    recall=tm.Recall(task="binary").to(device)
+    f1=tm.F1Score(task="binary").to(device)
+
+    if not continuing:
+        indicators={
+            'train': {
+                'loss': [],
+            },
+            'validation': {
+                'loss': [],
+                'accuracy': [],
+                'precision': [],
+                'auc': [],
+                'recall': [],
+                'f1': [],
+            }
+        }
+        start = 1
+    else:
+        checkpoint=torch.load(output_path/'ftree2fp.checkpoint.{}.pkl'.format(continue_from))
+        indicators=torch.load(output_path/'ftree2fp.indicators.{}.pkl'.format(continue_from))
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start=checkpoint['epoch']+1
+        if continue_from == 'last':
+            (output_path/'ftree2fp.checkpoint.last.pkl').rename(output_path/'ftree2fp.checkpoint.last.{}.pkl'.format(checkpoint['epoch']))
+            (output_path/'ftree2fp.indicators.last.pkl').rename(output_path/'ftree2fp.indicators.last.{}.pkl'.format(checkpoint['epoch']))
+        del checkpoint
+        
 
     Timer.tick('all')
-    for epoch in range(num_epochs):
+    for epoch in range(start, num_epochs + 1):
         Timer.tick()
         model.train()
-        y_loss_list=[]
-        leny_loss_list=[]
-        total_loss_list=[]
+        loss_list=[]
 
-        for data in tqdm(train_loader, desc='Train {:>3d}'.format(epoch), ncols=80):
+        for data in tqdm(train_loader, desc='Train {:d}'.format(epoch), ncols=100):
             data=data.to(device)
             optimizer.zero_grad()
-            y,leny=model(data)
-            y_loss=y_lossf(y, data.y.float())
-            leny_loss=leny_lossf(leny, data.leny.float())
-            total_loss=y_loss + leny_loss
+            y=model(data)
+            loss=lossf(y, data.y.float())
 
-            y_loss.backward(retain_graph=True)
-            leny_loss.backward()
+            loss.backward()
             optimizer.step()
 
-            y_loss_list.append(y_loss.item())
-            leny_loss_list.append(leny_loss.item())
-            total_loss_list.append(total_loss.item())
+            loss_list.append(loss.item())
 
-        print('Epoch {:>4d}/{:>4d} y_loss: {:>10.6f} leny_loss: {:>10.6f} total_loss: {:>10.6f} time: {:>10.6f}/{:>10.6f}\n'.format(epoch, num_epochs, mean(y_loss_list), mean(leny_loss_list), mean(total_loss_list), Timer.tock(), Timer.tock('all')))
+        train_loss=mean(loss_list)
+        indicators['train']['loss'].append(train_loss)
 
-        tfwriter.add_scalar('Train y_loss', mean(y_loss_list), epoch)
-        tfwriter.add_scalar('Train leny_loss', mean(leny_loss_list), epoch)
-        tfwriter.add_scalar('Train total_loss', mean(total_loss_list), epoch)
+        train_tfwriter.add_scalar('loss', train_loss, epoch)
 
-        train_losses['y_loss'].append(mean(y_loss_list))
-        train_losses['leny_loss'].append(mean(leny_loss_list))
-        train_losses['total_loss'].append(mean(total_loss_list))
+        print('Train {:d}/{:d} loss: {:.6} time: {:.6}/{:.6}\n'.format(epoch, num_epochs, train_loss, Timer.tock(), Timer.tock('all')))
 
         with torch.no_grad():
             Timer.tick()
             model.eval()
-            y_loss_list=[]
-            leny_loss_list=[]
-            total_loss_list=[]
+            loss_list=[]
 
-            for data in tqdm(val_loader, desc='Test {:>3d}'.format(epoch), ncols=80):
+            for data in tqdm(valid_loader, desc='Valid {:d}'.format(epoch), ncols=100):
                 data=data.to(device)
-                y,leny=model(data)
-                y_loss=y_lossf(y, data.y.float())
-                leny_loss=leny_lossf(leny, data.leny.float())
-                total_loss=y_loss + leny_loss
+                y=model(data)
+                loss=lossf(y, data.y.float())
 
-                y_loss_list.append(y_loss.item())
-                leny_loss_list.append(leny_loss.item())
-                total_loss_list.append(total_loss.item())
+                accuracy.update(y, data.y)
+                precision.update(y, data.y)
+                auc.update(y, data.y)
+                recall.update(y, data.y)
+                f1.update(y, data.y)
 
-            print('Epoch {:>4d}/{:>4d} y_loss: {:>10.6f} leny_loss: {:>10.6f} total_loss: {:>10.6f} time: {:>10.6f}/{:>10.6f}\n'.format(epoch, num_epochs, mean(y_loss_list), mean(leny_loss_list), mean(total_loss_list), Timer.tock(), Timer.tock('all')))
+                loss_list.append(loss.item())
 
-            val_losses['y_loss'].append(mean(y_loss_list))
-            val_losses['leny_loss'].append(mean(leny_loss_list))
-            val_losses['total_loss'].append(mean(total_loss_list))
+            valid_loss=mean(loss_list)
+            indicators['validation']['loss'].append(valid_loss)
 
-            tfwriter.add_scalar('Test y_loss', mean(y_loss_list), epoch)
-            tfwriter.add_scalar('Test leny_loss', mean(leny_loss_list), epoch)
-            tfwriter.add_scalar('Test total_loss', mean(total_loss_list), epoch)
+            valid_accuracy = accuracy.compute()
+            indicators['validation']['accuracy'].append(valid_accuracy)
+            valid_precision = precision.compute()
+            indicators['validation']['precision'].append(valid_precision)
+            valid_auc = auc.compute()
+            indicators['validation']['auc'].append(valid_auc)
+            valid_recall = recall.compute()
+            indicators['validation']['recall'].append(valid_recall)
+            valid_f1 = f1.compute()
+            indicators['validation']['f1'].append(valid_f1)
 
-            if(epoch+1) % save_epochs == 0:
-                torch.save(model.state_dict(), output_path/'ftree2fp.model.{}.pkl'.format(epoch+1))
-                torch.save(train_losses, output_path/'ftree2fp.train_losses.{}.pkl'.format(epoch+1))
-                torch.save(val_losses, output_path/'ftree2fp.val_losses.{}.pkl'.format(epoch+1))
+            valid_tfwriter.add_scalar('loss', valid_loss, epoch)
+            valid_tfwriter.add_scalar('accuracy', valid_accuracy, epoch)
+            valid_tfwriter.add_scalar('precision', valid_precision, epoch)
+            valid_tfwriter.add_scalar('auc', valid_auc, epoch)
+            valid_tfwriter.add_scalar('recall', valid_recall, epoch)
+            valid_tfwriter.add_scalar('f1', valid_f1, epoch)
+
+            print('Valid {:d}/{:d} loss: {:.6} accu: {:.6} prcs: {:.6} auc: {:.6} recl: {:.6} f1: {:.6} time: {:.6}/{:.6}\n'.format(epoch, num_epochs, valid_loss, valid_accuracy, valid_precision, valid_auc, valid_recall, valid_f1, Timer.tock(), Timer.tock('all')))
+
+            if epoch % save_epochs == 0:
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }, output_path/'ftree2fp.checkpoint.{}.pkl'.format(epoch), pickle_protocol=4)
+
+                torch.save(indicators, output_path/'ftree2fp.indicators.{}.pkl'.format(epoch), pickle_protocol=4)
 
             # if mean(y_loss_list) > 10 or mean(leny_loss_list) > 10 or mean(total_loss_list) > 15:
             #     print('Loss is too large. Stop training.')
             #     break
+        accuracy.reset()
+        precision.reset()
+        auc.reset()
+        recall.reset()
+        f1.reset()
 
-    torch.save(model.state_dict(), output_path/'ftree2fp.model.pkl')
-    torch.save(train_losses, output_path/'ftree2fp.train_losses.pkl')
-    torch.save(val_losses, output_path/'ftree2fp.val_losses.pkl')
+    torch.save({
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+    }, output_path/'ftree2fp.checkpoint.last.pkl'.format(epoch))
+    torch.save(indicators, output_path/'ftree2fp.indicators.last.pkl'.format(epoch))
 
 def make_path(output_path):
     """
