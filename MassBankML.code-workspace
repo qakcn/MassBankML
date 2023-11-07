@@ -5,7 +5,6 @@
 		}
 	],
 	"settings": {
-		"python.defaultInterpreterPath": "~/.miniconda3/envs/pyg/bin/python"
 	},
 	"launch": {
 		"version": "0.2.0",
