@@ -13,15 +13,32 @@
 # limitations under the License.
 
 ################################################################################
-## This script is for module importing.                                       ##
+## This script contains pytorch dataset classes.                              ##
 ##                                                                            ##
 ## Author: qakcn                                                              ##
 ## Email: qakcn@hotmail.com                                                   ##
 ## Date: 2023-12-01                                                           ##
 ################################################################################
 
-if __name__ == "__main__":
-    raise SystemExit("This script is not meant to be run directly")
+# PSL imports
 
-from .TerminalStyle import *
-from .Functions import *
+# Third-party imports
+import torch
+from torch_geometric.data import Dataset
+import pandas as pd
+
+# Local imports
+
+class MassbankMLDataset(Dataset):
+    def __init__(self, dataset: pd.Series):
+        super().__init__(None, transform=None, pre_transform=None, pre_filter=None)
+        self.data=dataset
+
+    def len(self):
+        return self.data.shape[0]
+    
+    def indices(self):
+        return range(self.data.shape[0])
+    
+    def get(self, idx: int):
+        return self.data.iloc[idx]

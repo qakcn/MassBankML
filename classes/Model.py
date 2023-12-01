@@ -1,27 +1,36 @@
+# Copyright 2023 qakcn
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+################################################################################
+## This script contains pytorch model.                                        ##
+##                                                                            ##
+## Author: qakcn                                                              ##
+## Email: qakcn@hotmail.com                                                   ##
+## Date: 2023-12-01                                                           ##
+################################################################################
+
+if __name__ == "__main__":
+    raise SystemExit("This script is not meant to be run directly")
+
+# PSL imports
+
+# Third-party imports
 import torch
 from torch import nn
 import torch_geometric.nn as pyg_nn
-from torch_geometric.data import Dataset
 
-class Ftree2fpDataset(Dataset):
-    def __init__(self, datalist, len_y_max):
-        super().__init__(None, transform=None, pre_transform=None, pre_filter=None)
-        self.data=datalist
-        self.len_y_max=len_y_max
-
-    def len(self):
-        return len(self.data)
-    
-    def indices(self):
-        return range(len(self.data))
-    
-    def get(self, idx):
-        d = self.data[idx]
-        y=d.y.reshape(-1)
-        d.leny = len(y)
-        pad = torch.zeros(self.len_y_max-d.leny, dtype=torch.long)
-        d.y = torch.cat((y, pad)).reshape([1, -1])
-        return d
+# Local imports
     
 class Ftree2fpGAT(torch.nn.Module):
     def __init__(self, hidden_dim, num_features, num_layers, output_dim, heads=1, dropout=0.5, num_embeddings=0, classes_is_bit=False):
