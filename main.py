@@ -23,17 +23,34 @@
 
 # PSL imports
 import pickle
+import time
 
 # Third-party imports
 import pandas as pd
 
+from tqdm import tqdm
+
+import torch
+from torch import optim
+from torch.utils.data import random_split
+from torch.utils.tensorboard import SummaryWriter
+
+from torch_geometric.loader import DataLoader
+
+import torchmetrics as tm
+
 # Local imports
 from classes import *
 
+##################################################
+# Parameters that can be edited by the user      #
+##################################################
+## Paths
 input_path = Path("inputs")
 intermediate_path = Path("intermediates")
 output_path = Path("outputs")
 
+## Files
 dataset_csi_file = input_path / "dataset.csi.pkl"
 dataset_no_csi_file = input_path / "dataset.no_csi.pkl"
 element_list_file = input_path / "element.nopd.pkl"
@@ -41,44 +58,62 @@ element_list_file = input_path / "element.nopd.pkl"
 dataset_csi_prepared_file = intermediate_path / "dataset.csi.prepared.pkl"
 dataset_no_csi_prepared_file = intermediate_path / "dataset.no_csi.prepared.pkl"
 
-
-
-hyperparameters = dict(
-    # hidden layer parameters
-    hidden_dim=1024,
-    gat_heads=4,
-    num_layers=3,
-
-    # learning parameters
-    batch_size=64,
-    num_epochs=3000,
-    learning_rate=0.0001,
-    weight_decay=1e-4,
+## Configurations
+configurations = dict(
+    model = dict(
+        # hidden layer parameters
+        hidden_dim=1024,
+        heads=4,
+        num_conv_layers=3,
+        num_linear_layers=2,
+        output_dim=16659,
+        dropout=0.5,
+    ),
+    optimizer = dict(
+        # optimizer parameters
+        lr=0.0001, #learning_rate
+        weight_decay=1e-4,
+    ),
+    learning = dict(
+        # learning parameters
+        batch_size=64,
+        num_epochs=3000,
+        epoch_save_period = 30
+    ),
 )
 
-epoch_save_period = 30
+# Train continuation
+continue_flag = False
+continue_args = dict(
+    train_num = "",
+    from_epoch = 0,
+)
+##################################################
+# End of parameters, do not edit below this line #
+##################################################
 
+# Initialization
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 TS.register_printer(tqdm.write)
 is_dataset_prepared = False
 
 if dataset_csi_prepared_file.is_file() and dataset_no_csi_prepared_file.is_file():
-    TS.ip("Reading prepared data sets...")
+    TS("Reading prepared data sets...").p()
     dataset_csi = pd.read_pickle(dataset_csi_prepared_file)
     dataset_no_csi = pd.read_pickle(dataset_no_csi_prepared_file)
     is_dataset_prepared = True
-    TS.p(TS.green("Done."))
+    TS("Done.").green().p()
 
 with open(element_list_file, "rb") as f:
     element_list = list(pickle.load(f))
-num_features = len(element_list)
+configurations["model"]["num_features"] = len(element_list) + 2
 
 if not is_dataset_prepared:
-    TS.p("Reading data set files...")
+    TS("Reading data set files...").ip()
     dataset_csi = pd.read_pickle(dataset_csi_file)
     dataset_no_csi = pd.read_pickle(dataset_no_csi_file)
-    TS.p(TS.green("Done."))
+    TS("Done.").green().p()
 
     tqdm.pandas(desc="Preparing data set within CSI:FingerID", total = dataset_csi.shape[0], ncols=100)
     dataset_csi = dataset_csi.progress_apply(prepare_row, axis=1, element_list=element_list)
@@ -86,16 +121,200 @@ if not is_dataset_prepared:
     tqdm.pandas(desc="Preparing data set without CSI:FingerID", total = dataset_no_csi.shape[0], ncols=100)
     dataset_no_csi = dataset_no_csi.progress_apply(prepare_row, axis=1, element_list=element_list)
 
-    TS.ip("Saving prepared data sets...")
+    TS("Saving prepared data sets...").ip()
     dataset_csi.to_pickle(dataset_csi_prepared_file)
     dataset_no_csi.to_pickle(dataset_no_csi_prepared_file)
-    TS.p(TS.green("Done."))
+    TS("Done.").green().p()
 
     is_dataset_prepared = True
 
 if is_dataset_prepared:
-    dataset_csi = MassbankMLDataset(dataset_csi)
-    dataset_no_csi = MassbankMLDataset(dataset_no_csi)
+    if continue_flag:
+        TS("Countinuing training ").add(continue_args["train_num"], "cyan").add(" from epoch ").add(continue_args["from_epoch"], "blue").add(".").bold().p()
+        train_num = continue_args["train_num"]
+        from_epoch = continue_args["from_epoch"]
+    else:
+        TS("Starting new training ").ip()
+        train_num = str(int(time.time()))
+        from_epoch = 0
+        TS(train_num).cyan().add(".").bold().p()
     
+    TS("Make directories...").ip()
+    train_output_path = output_path / train_num
+    train_output_path.mkdir(parents=True, exist_ok=True)
+    (train_output_path/"checkpoints").mkdir(parents=True, exist_ok=True)
+    (train_output_path/"tfevent").mkdir(parents=True, exist_ok=True)
+    TS("Done.").green().p()
 
 
+    if not continue_flag:
+        TS("Splitting data sets: ").ip()
+        dataset_csi = MassbankMLDataset(dataset_csi)
+        dataset_no_csi = MassbankMLDataset(dataset_no_csi)
+
+        train_size = int(0.8 * (len(dataset_no_csi) + len(dataset_csi))) - len(dataset_csi)
+        valid_size = int(0.1 * (len(dataset_no_csi) + len(dataset_csi)))
+        test_size = len(dataset_no_csi) - train_size - valid_size
+
+        TS("train:valid:test=").add([train_size, valid_size, test_size], "blue", ":").add("...").ip()
+        train_dataset, valid_dataset, test_dataset = random_split(dataset_no_csi, [train_size, valid_size, test_size])
+        train_dataset += dataset_csi
+        TS("Done.").green().p()
+
+        TS(f"Saving data sets...").ip()
+        torch.save(train_dataset, train_output_path / "train_dataset.pkl")
+        torch.save(valid_dataset, train_output_path / "valid_dataset.pkl")
+        torch.save(test_dataset, train_output_path / "test_dataset.pkl")
+        TS("Done.").green().p()
+    else:
+        TS("Loading data sets...").ip()
+        train_dataset = torch.load(train_output_path / "train_dataset.pkl")
+        valid_dataset = torch.load(train_output_path / "valid_dataset.pkl")
+        test_dataset = torch.load(train_output_path / "test_dataset.pkl")
+        TS("Done.").green().p()
+
+    TS("Saving configurations...").ip()
+    torch.save(configurations, train_output_path / "configurations.pkl")
+    TS("Done.").green().p()
+
+    TS("Creating TensorBoard profiler...").ip()
+    train_tfwriter = SummaryWriter(train_output_path / "tfevent/train")
+    valid_tfwriter = SummaryWriter(train_output_path / "tfevent/valid")
+    TS("Done.").green().p()
+    
+    TS("Creating data loaders...").ip()
+    train_loader = DataLoader(train_dataset, batch_size=configurations["learning"]["batch_size"], shuffle=True, num_workers=36)
+    valid_loader = DataLoader(valid_dataset, batch_size=configurations["learning"]["batch_size"], shuffle=True, num_workers=36)
+    TS("Done.").green().p()
+
+    TS("Constructing model...").ip()
+    model = Ftree2fpGAT(**configurations["model"]).to(device)
+    optimizer = optim.AdamW(model.parameters(), **configurations["optimizer"])
+
+    loss_fn = torch.nn.BCELoss()
+
+    accuracy=tm.Accuracy(task="binary").to(device)
+    precision=tm.Precision(task="binary").to(device)
+    auc=tm.AUROC(task="binary").to(device)
+    recall=tm.Recall(task="binary").to(device)
+    f1=tm.F1Score(task="binary").to(device)
+    TS("Done.").green().p()
+
+    if not continue_flag:
+        indicators = {
+            'train': {
+                'loss': [],
+            },
+            'validation': {
+                'loss': [],
+                'accuracy': [],
+                'precision': [],
+                'auc': [],
+                'recall': [],
+                'f1': [],
+            }
+        }
+        start = 1
+    else:
+        TS("Loading checkpoint parameters...").ip()
+        checkpoint = torch.load(train_output_path / "checkpoints" / f"checkpoint.{continue_args['from_epoch']}.pkl")
+        indicators = torch.load(train_output_path / "checkpoints" / f"indicators.{continue_args['from_epoch']}.pkl")
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        start = checkpoint["epoch"] + 1
+
+        if continue_args["from_epoch"] == "last":
+            (train_output_path / "checkpoints" / "checkpoint.last.pkl").rename(train_output_path / "checkpoints" / f"checkpoint.last.{checkpoint['epoch']}.pkl")
+            (train_output_path / "checkpoints" / "indicators.last.pkl").rename(train_output_path / "checkpoints" / f"indicators.last.{checkpoint['epoch']}.pkl")
+        del checkpoint
+        TS("Done.").green().p()
+    
+    Timer.tick("all")
+    TS("Start training...").p()
+    for epoch in range(start, configurations["learning"]["num_epochs"]):
+        Timer.tick()
+        model.train()
+        loss_list = []
+
+        for data in tqdm(train_loader, desc=f"Train {epoch}", ncols=100):
+            data = data.to(device)
+            optimizer.zero_grad()
+
+            output = model(data)
+            loss = loss_fn(output, data.y.float())
+            loss_list.append(loss.item())
+
+            loss.backward()
+            optimizer.step()
+
+        train_loss = mean(loss_list)
+        indicators["train"]["loss"].append(train_loss)
+
+        train_tfwriter.add_scalar("loss", train_loss, epoch)
+
+        TS("Train ").add(epoch, "blue").add("/").add(configurations["learning"]["num_epochs"], "cyan").add(" loss: ").add(f"{train_loss:.4f}", "magenta").add(" time: ").add(format_time(Timer.tock())).add("/").add(format_time(Timer.tock("all"))).p()
+
+        with torch.no_grad():
+            Timer.tick()
+            model.eval()
+            loss_list = []
+
+            for data in tqdm(valid_loader, desc=f"Valid {epoch}", ncols=100):
+                data = data.to(device)
+
+                output = model(data)
+                loss = loss_fn(output, data.y.float())
+                loss_list.append(loss.item())
+
+                accuracy(output, data.y.float())
+                precision(output, data.y.float())
+                auc(output, data.y.float())
+                recall(output, data.y.float())
+                f1(output, data.y.float())
+
+                loss_list.append(loss.item())
+            
+            valid_loss = mean(loss_list)
+            indicators["validation"]["loss"].append(valid_loss)
+
+            valid_accuracy = float(accuracy.compute())
+            valid_precision = float(precision.compute())
+            valid_auc = float(auc.compute())
+            valid_recall = float(recall.compute())
+            valid_f1 = float(f1.compute())
+            indicators["validation"]["accuracy"].append(valid_accuracy)
+            indicators["validation"]["precision"].append(valid_precision)
+            indicators["validation"]["auc"].append(valid_auc)
+            indicators["validation"]["recall"].append(valid_recall)
+            indicators["validation"]["f1"].append(valid_f1)
+
+            valid_tfwriter.add_scalar("loss", valid_loss, epoch)
+            valid_tfwriter.add_scalar("accuracy", valid_accuracy, epoch)
+            valid_tfwriter.add_scalar("precision", valid_precision, epoch)
+            valid_tfwriter.add_scalar("auc", valid_auc, epoch)
+            valid_tfwriter.add_scalar("recall", valid_recall, epoch)
+            valid_tfwriter.add_scalar("f1", valid_f1, epoch)
+
+            TS("Valid ").add(epoch, "blue").add("/").add(configurations["learning"]["num_epochs"], "cyan").add(" loss: ").add(f"{valid_loss:.4f}", "magenta").add(" Acc: ").add(f"{valid_accuracy:.4f}", "fg_27").add(" P: ").add(f"{valid_precision:.4f}","fg_48").add(" AUC: ").add(f"{valid_auc:.4f}", "fg_57").add(" R: ").add(f"{valid_recall:.4f}", "fg_165").add(" F1: ").add(f"{valid_f1:.4f}", "fg_221").add(" time: ").add(format_time(Timer.tock())).add("/").add(format_time(Timer.tock("all"))).p()
+
+            if epoch % configurations["learning"]["epoch_save_period"] == 0:
+                torch.save({
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                }, train_output_path / "checkpoints" / f"checkpoint.{epoch}.pkl")
+                torch.save(indicators, train_output_path / "checkpoints" / f"indicators.{epoch}.pkl")
+        
+        accuracy.reset()
+        precision.reset()
+        auc.reset()
+        recall.reset()
+        f1.reset()
+
+    torch.save({
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+    }, train_output_path / "checkpoints" / "checkpoint.last.pkl")
+
+    TS("Training finished.").green().p()

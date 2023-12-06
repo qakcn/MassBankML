@@ -29,13 +29,7 @@ from statistics import mean
 
 # Third-party imports
 import torch
-from torch import optim
-from torch.utils.data import random_split
-from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.data import Data
-
-import torchmetrics as tm
-from tqdm import tqdm
 
 # Local imports
 from .Model import *
@@ -71,24 +65,28 @@ def prepare_row(row, element_list):
     edge_attr = list(edges.values())*2
     edge_attr = torch.tensor(edge_attr, dtype=torch.float).reshape([-1,1])
 
-    fptype = [
-        "FP2",
-        "AtomPair",
-        "Avalon",
-        "MACCS",
-        "Morgan",
-        "TopologicalTorsion",
-        "RDKitFingerprint",
-        "CDKFingerprint",
-        "PubChemFingerprint",
-        "Klekota-Roth"
-    ]
+    fptype = {
+        "FP2" : 1024,
+        "AtomPair" : 2048,
+        "Avalon" : 512,
+        "MACCS" : 166,
+        "Morgan" : 2048,
+        "RDKitFingerprint" : 2048,
+        "TopologicalTorsion" : 2048,
+        "CDKFingerprint": 1024,
+        "PubChemFingerprint": 881,
+        "Klekota-Roth": 4860,
+    }
 
     y = []
 
     for fp in fptype:
         fplist = fingerprints[fp].tolist()
         y.extend(fplist)
-    y = torch.tensor(y, dtype=torch.uint8)
+    y = torch.tensor(y, dtype=torch.uint8).reshape([1,-1])
 
     return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
+
+def format_time(seconds):
+    seconds = int(seconds)
+    return f"{seconds//3600}:{(seconds%3600)//60}:{seconds%60}"

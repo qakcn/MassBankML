@@ -24,4 +24,5 @@ if __name__ == "__main__":
     raise SystemExit("This script is not meant to be run directly")
 
 from .TerminalStyle import *
+from .Timer import *
 from .Functions import *

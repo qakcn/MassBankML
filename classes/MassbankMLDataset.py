@@ -23,7 +23,6 @@
 # PSL imports
 
 # Third-party imports
-import torch
 from torch_geometric.data import Dataset
 import pandas as pd
 
@@ -42,3 +41,7 @@ class MassbankMLDataset(Dataset):
     
     def get(self, idx: int):
         return self.data.iloc[idx]
+    
+    def __add__(self, other: "MassbankMLDataset"):
+        self.data = pd.concat([self.data, other.data], ignore_index=True)
+        return self
