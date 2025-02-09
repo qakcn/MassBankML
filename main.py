@@ -22,8 +22,10 @@
 ################################################################################
 
 # PSL imports
+from pathlib import Path
 import pickle
 import time
+from statistics import mean
 
 # Third-party imports
 import pandas as pd
@@ -41,6 +43,8 @@ import torchmetrics as tm
 
 # Local imports
 from classes import *
+from classes.Model import *
+from classes.MassbankMLDataset import *
 
 ##################################################
 # Parameters that can be edited by the user      #

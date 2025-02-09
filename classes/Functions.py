@@ -24,8 +24,6 @@ if __name__ == "__main__":
     raise SystemExit("This script is not meant to be run directly")
 
 # PSL imports
-from pathlib import Path
-from statistics import mean
 
 # Third-party imports
 import torch
@@ -43,6 +41,9 @@ def prepare_row(row, element_list):
     x=[]
 
     keys = sorted(nodes.keys())
+
+    element_list = sorted(element_list)
+
     for key in keys:
         xn = []
         node = nodes[key]

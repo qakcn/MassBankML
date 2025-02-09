@@ -1,14 +1,13 @@
 # PSL imports
-import pickle
-import time
+from pathlib import Path
+from statistics import mean
 
 # Third-party imports
-import pandas as pd
-
 from tqdm import tqdm
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import Subset
 
 from torch_geometric.loader import DataLoader
 
@@ -23,12 +22,13 @@ from classes import *
 ## Paths
 input_path = Path("inputs")
 output_path = Path("outputs")
+intermediate_path = Path("intermediates")
 
 ## Files
 element_list_file = input_path / "element.nopd.pkl"
 
-train_num = "1701793186"
-epoch_num = 5000
+train_num = "1706325061"
+epoch_num = 300
 
 
 ##################################################
@@ -38,10 +38,14 @@ epoch_num = 5000
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 train_output_path = output_path / train_num
-eval_path = train_output_path / "eval"
+eval_path = train_output_path / "eval_casmi"
 
 TS("Loading data sets...").ip()
-eval_dataset = torch.load(train_output_path / "test_dataset.pkl")
+# eval_dataset = torch.load(train_output_path / "valid_dataset.pkl")
+eval_dataset = pd.read_pickle(intermediate_path / "dataset.casmi.prepared.pkl")
+eval_dataset = MassbankMLDataset(eval_dataset)
+indices = list(eval_dataset.indices())
+eval_dataset = Subset(eval_dataset, indices)
 TS("Done.").green().p()
 
 TS("Loading configurations..").ip()
@@ -54,7 +58,7 @@ TS("Done.").green().p()
 
 eval_path.mkdir(parents=True, exist_ok=True)
 
-eval_tfwriter = SummaryWriter(train_output_path / "tfevent/eval")
+# eval_tfwriter = SummaryWriter(train_output_path / "tfevent/eval")
 
 TS("Constructing model...").ip()
 model = Ftree2fpGAT(**configurations["model"]).to(device)
@@ -97,6 +101,7 @@ for idx in tqdm(eval_dataset.indices, desc="Evaluating", ncols=100):
     precision_list.append(float(precision_score))
     auc_list.append(float(auc_score))
     recall_list.append(float(recall_score))
+    f1_list.append(float(f1_score))
 
     results[idx] = {
         "data": data,
